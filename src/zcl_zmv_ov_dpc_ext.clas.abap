@@ -4,6 +4,9 @@ class ZCL_ZMV_OV_DPC_EXT definition
   create public .
 
 public section.
+
+  methods /IWBEP/IF_MGW_APPL_SRV_RUNTIME~CREATE_DEEP_ENTITY
+    redefinition .
 protected section.
 
   methods MENSAGEMSET_CREATE_ENTITY
@@ -605,4 +608,154 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     ENDIF.
 
   endmethod.
+
+
+  METHOD /iwbep/if_mgw_appl_srv_runtime~create_deep_entity.
+
+    " Estruturas do deep entity (cabeçalho + itens) conforme o MPC gerado
+    DATA : ls_deep_entity  TYPE zcl_zjv_ov_mpc_ext=>ty_ordem_item.
+    DATA : ls_deep_item    TYPE zcl_zjv_ov_mpc_ext=>ts_ovitem.
+
+    " Estruturas/tabelas físicas (Z*) que serão persistidas
+    DATA : ls_cab          TYPE zjv_ovcab.
+    DATA : lt_item         TYPE STANDARD TABLE OF zjv_ovitem.
+    DATA : ls_item         TYPE zjv_ovitem.
+    DATA : ld_updkz        TYPE char1. " I = insert / U = update
+
+    " Container de mensagens do Gateway para retorno de erros de negócio
+    DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
+
+    " Lê o payload recebido (cabeçalho + itens) da requisição OData Deep Insert/Update
+    CALL METHOD io_data_provider->read_entry_data
+      IMPORTING
+        es_data = ls_deep_entity.
+
+    " Decisão: criar (I) se ordemid = 0; caso contrário, atualizar (U)
+    IF ls_deep_entity-ordemid = 0.
+      ld_updkz = 'I'.
+
+      " Move campos do deep entity para o cabeçalho físico
+      MOVE-CORRESPONDING ls_deep_entity TO ls_cab.
+
+      " Auditoria de criação
+      ls_cab-criacao_data    = sy-datum.
+      ls_cab-criacao_hora    = sy-uzeit.
+      ls_cab-criacao_usuario = sy-uname.
+
+      " Geração de chave por MAX+1 (ATENÇÃO: suscetível a condição de corrida)
+      SELECT SINGLE MAX( ordemid ) INTO ls_cab-ordemid FROM zjv_ovcab.
+      ls_cab-ordemid = ls_cab-ordemid + 1.
+
+    ELSE.
+
+      ld_updkz = 'U'.
+
+      " Busca do cabeçalho existente para atualização
+      SELECT SINGLE *
+        INTO ls_cab
+        FROM zjv_ovcab
+       WHERE ordemid = ls_deep_entity-ordemid.
+
+      " Atualiza campos editáveis do cabeçalho com valores do deep entity
+      ls_cab-clienteid  = ls_deep_entity-clienteid.
+      ls_cab-status     = ls_deep_entity-status.
+      ls_cab-totalitens = ls_deep_entity-totalitens.
+      ls_cab-totalfrete = ls_deep_entity-totalfrete.
+      ls_cab-totalordem = ls_cab-totalitens + ls_cab-totalfrete.
+    ENDIF.
+
+    " Transforma a coleção toovitem do deep entity em registros da tabela física de itens
+    LOOP AT ls_deep_entity-toovitem INTO ls_deep_item.
+      MOVE-CORRESPONDING ls_deep_item TO ls_item.
+      ls_item-ordemid = ls_cab-ordemid. " Garante chave pai-filho
+      APPEND ls_item TO lt_item.
+    ENDLOOP.
+
+    " Persistência do cabeçalho conforme operação
+    IF ld_updkz = 'I'.
+
+      " INSERT do cabeçalho
+      INSERT zjv_ovcab FROM ls_cab.
+
+      IF sy-subrc <> 0.
+        ROLLBACK WORK. " Reverte qualquer alteração anterior da LUW
+
+        lo_msg->add_message_text_only(
+          EXPORTING
+            iv_msg_type = 'E'
+            iv_msg_text = 'Erro ao inserir ordem'
+        ).
+        RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+          EXPORTING
+            message_container = lo_msg.
+      ENDIF.
+
+    ELSE.
+
+      " UPDATE/UPSERT do cabeçalho (MODIFY em tabela DB atualiza se existe/senão insere)
+      MODIFY zjv_ovcab FROM ls_cab.
+
+      IF sy-subrc <> 0.
+        ROLLBACK WORK.
+
+        lo_msg->add_message_text_only(
+          EXPORTING
+            iv_msg_type = 'E'
+            iv_msg_text = 'Erro ao atualizar ordem'
+        ).
+        RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+          EXPORTING
+            message_container = lo_msg.
+      ENDIF.
+
+    ENDIF.
+
+    " Estratégia de itens: remove todos os itens do pedido e insere a nova lista
+    DELETE FROM zjv_ovitem WHERE ordemid = ls_cab-ordemid.
+
+    IF lines( lt_item ) > 0.
+
+      " INSERT em massa dos itens montados
+      INSERT zjv_ovitem FROM TABLE lt_item.
+
+      IF sy-subrc <> 0.
+        ROLLBACK WORK.
+
+        lo_msg->add_message_text_only(
+          EXPORTING
+            iv_msg_type = 'E'
+            iv_msg_text = 'Erro ao inserir itens'
+        ).
+        RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+          EXPORTING
+            message_container = lo_msg.
+      ENDIF.
+
+    ENDIF.
+
+    " Confirma a LUW explicitamente
+    COMMIT WORK AND WAIT.
+
+    " Retorno: preenche o ordemid gerado no deep entity para o response
+    ls_deep_entity-ordemid = ls_cab-ordemid.
+
+    " Converte data/hora de criação para timestamp no fuso do usuário
+    CONVERT DATE ls_cab-criacao_data
+            TIME ls_cab-criacao_hora
+            INTO TIME STAMP ls_deep_entity-datacriacao
+            TIME ZONE sy-zonlo.
+
+    " Garante que os itens de retorno tragam o ordemid preenchido
+    LOOP AT ls_deep_entity-toovitem ASSIGNING FIELD-SYMBOL(<ls_deep_item>).
+      <ls_deep_item>-ordemid = ls_cab-ordemid.
+    ENDLOOP.
+
+    " Copia a estrutura final para a referência de saída do Gateway
+    CALL METHOD me->copy_data_to_ref
+      EXPORTING
+        is_data = ls_deep_entity
+      CHANGING
+        cr_data = er_deep_entity.
+
+  ENDMETHOD.
 ENDCLASS.
