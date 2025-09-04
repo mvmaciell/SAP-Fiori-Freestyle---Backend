@@ -122,8 +122,70 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   endmethod.
 
 
-  method OVCABSET_GET_ENTITY.
-  endmethod.
+  METHOD ovcabset_get_entity.
+
+    " Declaração de variáveis locais
+    DATA: ld_ordemid TYPE zjv_ovcab-ordemid. " Guarda o ID da ordem informado na chave da requisição OData
+    DATA: ls_key_tab LIKE LINE OF it_key_tab. " Estrutura auxiliar para leitura da chave recebida
+    DATA: ls_cab     TYPE zjv_ovcab.          " Estrutura para receber os dados do cabeçalho da ordem (tabela Z)
+
+    " Objeto para manipulação de mensagens do Gateway (erros, avisos, etc.)
+    DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
+
+    " === Passo 1: Obter parâmetro de entrada (chave OrdemId) ===
+    READ TABLE it_key_tab INTO ls_key_tab WITH KEY name = 'OrdemId'.
+    IF sy-subrc <> 0.
+      " Caso não tenha sido informado OrdemId na requisição
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'              " Tipo de mensagem: Erro
+          iv_msg_text = 'Id da ordem não informado'
+      ).
+
+      " Interrompe processamento lançando exceção do Gateway
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
+    " Se informado, armazena o valor em ld_ordemid
+    ld_ordemid = ls_key_tab-value.
+
+    " === Passo 2: Buscar dados no banco ===
+    SELECT SINGLE *                       " Lê apenas um registro
+      INTO ls_cab
+      FROM zjv_ovcab                      " Tabela customizada de cabeçalho da ordem
+     WHERE ordemid = ld_ordemid.          " Filtra pelo ID recebido
+
+    " === Passo 3: Preencher entidade de retorno ===
+    IF sy-subrc = 0.
+      " Copia os campos do registro encontrado para a entidade de saída do OData
+      MOVE-CORRESPONDING ls_cab TO er_entity.
+
+      " Ajusta campo específico com nome diferente
+      er_entity-criadopor = ls_cab-criacao_usuario.
+
+      " Converte data + hora de criação em um timestamp UTC
+      CONVERT DATE ls_cab-criacao_data
+              TIME ls_cab-criacao_hora
+         INTO TIME STAMP er_entity-datacriacao
+         TIME ZONE 'UTC'. " Pode ser ajustado para sy-zonlo, caso precise respeitar fuso do sistema
+
+    ELSE.
+      " Caso não exista registro correspondente
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'
+          iv_msg_text = 'Id da ordem não encontrado'
+      ).
+
+      " Lança exceção de negócio para o Gateway retornar erro ao consumidor
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
+  ENDMETHOD.
 
 
   METHOD ovcabset_get_entityset.
@@ -245,8 +307,75 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   endmethod.
 
 
-  method OVITEMSET_GET_ENTITY.
-  endmethod.
+  METHOD ovitemset_get_entity.
+
+    " Declaração de variáveis auxiliares
+    DATA: ls_key_tab LIKE LINE OF it_key_tab. " Usada para ler parâmetros de chave da requisição
+    DATA: ls_item    TYPE zjv_ovitem.         " Estrutura para armazenar dados do item
+    DATA: ld_error   TYPE flag.               " Flag de controle para marcar se houve erro de entrada
+
+    " Contêiner de mensagens do Gateway (erros/avisos/infos)
+    DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
+
+    " === Passo 1: Ler chave OrdemId ===
+    READ TABLE it_key_tab INTO ls_key_tab WITH KEY name = 'OrdemId'.
+    IF sy-subrc <> 0. " Se não encontrou a chave OrdemId
+      ld_error = 'X'.
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'                   " Tipo Erro
+          iv_msg_text = 'Id da ordem não informado'
+      ).
+    ENDIF.
+    " Armazena OrdemId no registro do item (mesmo que não validado)
+    ls_item-ordemid = ls_key_tab-value.
+
+    " === Passo 2: Ler chave ItemId ===
+    READ TABLE it_key_tab INTO ls_key_tab WITH KEY name = 'ItemId'.
+    IF sy-subrc <> 0. " Se não encontrou a chave ItemId
+      ld_error = 'X'.
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'
+          iv_msg_text = 'Id do item não informado'
+      ).
+    ENDIF.
+    " Armazena ItemId no registro
+    ls_item-itemid = ls_key_tab-value.
+
+    " === Passo 3: Se houve erro em qualquer chave, aborta processamento ===
+    IF ld_error = 'X'.
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
+    " === Passo 4: Buscar registro no banco ===
+    SELECT SINGLE *                         " Busca registro único
+      INTO ls_item
+      FROM zjv_ovitem                       " Tabela Z customizada de itens
+     WHERE ordemid = ls_item-ordemid
+       AND itemid  = ls_item-itemid.
+
+    " === Passo 5: Validar resultado ===
+    IF sy-subrc = 0.
+      " Copia dados encontrados para entidade de saída do OData
+      MOVE-CORRESPONDING ls_item TO er_entity.
+    ELSE.
+      " Caso não encontre o item, retorna erro de negócio
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'
+          iv_msg_text = 'Item não encontrado'
+      ).
+
+      " Lança exceção para o Gateway retornar erro ao consumidor
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
+  ENDMETHOD.
 
 
   METHOD ovitemset_get_entityset.
