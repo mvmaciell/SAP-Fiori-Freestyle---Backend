@@ -118,8 +118,58 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   ENDMETHOD.
 
 
-  method OVCABSET_DELETE_ENTITY.
-  endmethod.
+  METHOD ovcabset_delete_entity.
+
+    " Declara uma estrutura para receber uma linha da tabela de chaves (it_key_tab)
+    DATA: ls_key_tab LIKE LINE OF it_key_tab.
+
+    " Recupera o container de mensagens do Gateway (para retorno de mensagens de erro/sucesso)
+    DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
+
+    " Lê a tabela de chaves procurando a entrada com o campo 'OrdemId'
+    READ TABLE it_key_tab INTO ls_key_tab WITH KEY name = 'OrdemId'.
+    IF sy-subrc <> 0. " Se não encontrou o parâmetro 'OrdemId'
+
+      " Adiciona mensagem de erro no container
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'
+          iv_msg_text = 'OrdemId não informado'
+      ).
+
+      " Lança exceção de negócio do Gateway com a mensagem criada
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
+    " Caso OrdemId tenha sido informado, exclui registros da tabela de itens pela chave OrdemId
+    DELETE FROM zjv_ovitem WHERE ordemid = ls_key_tab-value.
+
+    " Em seguida, exclui o registro do cabeçalho pela mesma chave OrdemId
+    DELETE FROM zjv_ovcab WHERE ordemid = ls_key_tab-value.
+    IF sy-subrc <> 0. " Se não conseguiu excluir no cabeçalho (nenhum registro encontrado ou erro)
+
+      " Faz rollback de todas as alterações anteriores (desfaz a exclusão dos itens também)
+      ROLLBACK WORK.
+
+      " Adiciona mensagem de erro ao container
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'
+          iv_msg_text = 'Erro ao remover ordem'
+      ).
+
+      " Lança exceção para retornar o erro ao consumidor do serviço
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
+    " Se chegou até aqui, confirma a exclusão de forma síncrona
+    COMMIT WORK AND WAIT.
+
+  ENDMETHOD.
 
 
   METHOD ovcabset_get_entity.
@@ -368,8 +418,46 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   endmethod.
 
 
-  method OVITEMSET_DELETE_ENTITY.
-  endmethod.
+  METHOD ovitemset_delete_entity.
+
+    " Declara uma estrutura do tipo da tabela de itens (zjv_ovitem)
+    DATA: ls_item    TYPE zjv_ovitem.
+
+    " Declara uma estrutura para receber uma linha da tabela de chaves
+    DATA: ls_key_tab LIKE LINE OF it_key_tab.
+
+    " Recupera o container de mensagens do Gateway (para manipular erros e retornos)
+    DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
+
+    " Extrai os valores das chaves enviadas na requisição OData
+    " Busca o parâmetro 'OrdemId' da tabela it_key_tab e grava em ls_item-ordemid
+    ls_item-ordemid = it_key_tab[ name = 'OrdemId' ]-value.
+
+    " Busca o parâmetro 'ItemId' da tabela it_key_tab e grava em ls_item-itemid
+    ls_item-itemid  = it_key_tab[ name = 'ItemId' ]-value.
+
+    " Realiza a exclusão direta no banco da tabela Z (zjv_ovitem)
+    " Apenas remove o registro cujo OrdemId e ItemId coincidam
+    DELETE FROM zjv_ovitem
+     WHERE ordemid = ls_item-ordemid
+       AND itemid  = ls_item-itemid.
+
+    " Se não encontrou nenhum registro para excluir (sy-subrc <> 0)
+    IF sy-subrc <> 0.
+      " Adiciona mensagem de erro no container
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'
+          iv_msg_text = 'Erro ao remover item'
+      ).
+
+      " Lança exceção de negócio do Gateway, retornando a mensagem ao consumidor
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
+  ENDMETHOD.
 
 
   METHOD ovitemset_get_entity.
