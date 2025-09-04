@@ -256,6 +256,71 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
 
 
   method OVCABSET_UPDATE_ENTITY.
+
+    DATA: ld_error TYPE flag.
+
+    " Container padrão do Gateway para acumular mensagens de negócio/validação
+    DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
+
+    " Lê o payload do OData recebido e preenche er_entity (estrutura do entity type)
+    io_data_provider->read_entry_data(
+      IMPORTING
+        es_data = er_entity
+    ).
+
+    " Lê a chave técnica 'OrdemId' vinda na URL (it_key_tab) e atribui ao entity
+    er_entity-ordemid = it_key_tab[ name = 'OrdemId' ]-value.
+
+    " Validação funcional: cliente obrigatório
+    IF er_entity-clienteid = 0.
+      ld_error = 'X'.
+      lo_msg->add_message_text_only(
+        EXPORTING iv_msg_type = 'E' iv_msg_text = 'Cliente vazio'
+      ).
+    ENDIF.
+
+    " Validação funcional: mínimo de valor total da ordem (usa MSG Class ZJV_OV nº 1)
+    IF er_entity-totalordem < 10.
+      ld_error = 'X'.
+      lo_msg->add_message(
+        EXPORTING
+          iv_msg_type   = 'E'
+          iv_msg_id     = 'ZJV_OV'
+          iv_msg_number = 1
+          iv_msg_v1     = 'R$ 10,00'
+          iv_msg_v2     =  |{ er_entity-ordemid }|
+      ).
+    ENDIF.
+
+    " Se houve qualquer erro de validação, dispara exceção de negócio do Gateway (HTTP 400)
+    IF ld_error = 'X'.
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg
+          http_status_code  = 400.
+    ENDIF.
+
+    " Recalcula o total de forma derivada (garante consistência com os componentes)
+    er_entity-totalordem = er_entity-totalitens + er_entity-totalfrete.
+
+    " Atualiza a Z-table com os novos valores (filtro pela chave ORDMEID)
+    UPDATE zjv_ovcab
+       SET clienteid  = er_entity-clienteid
+           totalitens = er_entity-totalitens
+           totalfrete = er_entity-totalfrete
+           totalordem = er_entity-totalordem
+           status     = er_entity-status
+     WHERE ordemid    = er_entity-ordemid.
+
+    " Se nenhum registro foi atualizado (sy-subrc <> 0), devolve erro de negócio
+    IF sy-subrc <> 0.
+      lo_msg->add_message_text_only(
+        EXPORTING iv_msg_type = 'E' iv_msg_text = 'Erro ao atualizar ordem'
+      ).
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING message_container = lo_msg.
+    ENDIF.
+
   endmethod.
 
 
@@ -412,5 +477,44 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
 
 
   method OVITEMSET_UPDATE_ENTITY.
+
+    " Container de mensagens do Gateway para retornar erros de negócio ao frontend
+    DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
+
+    " Lê o payload do OData (JSON/XML) e preenche er_entity com os campos do item
+    io_data_provider->read_entry_data(
+      IMPORTING
+        es_data = er_entity
+    ).
+
+    " Extrai as chaves da URL (table expression).
+    er_entity-ordemid  = it_key_tab[ name = 'OrdemId' ]-value.
+    er_entity-itemid   = it_key_tab[ name = 'ItemId' ]-value.
+
+    " Calcula o total do item como quantidade * preço unitário (consistência derivada)
+    er_entity-precotot = er_entity-quantidade * er_entity-precouni.
+
+    " Atualiza a Z-table do item pela chave (ordemid+itemid)
+    UPDATE zjv_ovitem
+       SET material   = er_entity-material
+           descricao  = er_entity-descricao
+           quantidade = er_entity-quantidade
+           precouni   = er_entity-precouni
+           precotot   = er_entity-precotot
+     WHERE ordemid    = er_entity-ordemid
+       AND itemid     = er_entity-itemid.
+
+    " Se nada foi atualizado (linha não encontrada ou falha), retorna erro de negócio
+    IF sy-subrc <> 0.
+      lo_msg->add_message_text_only(
+        EXPORTING
+          iv_msg_type = 'E'
+          iv_msg_text = 'Erro ao atualizar item'
+      ).
+      RAISE EXCEPTION TYPE /iwbep/cx_mgw_busi_exception
+        EXPORTING
+          message_container = lo_msg.
+    ENDIF.
+
   endmethod.
 ENDCLASS.
