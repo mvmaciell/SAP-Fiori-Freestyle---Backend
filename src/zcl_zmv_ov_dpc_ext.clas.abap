@@ -7,6 +7,8 @@ public section.
 
   methods /IWBEP/IF_MGW_APPL_SRV_RUNTIME~CREATE_DEEP_ENTITY
     redefinition .
+  methods /IWBEP/IF_MGW_APPL_SRV_RUNTIME~EXECUTE_ACTION
+    redefinition .
 protected section.
 
   methods MENSAGEMSET_CREATE_ENTITY
@@ -71,7 +73,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
 
     " Último ID gerado
     DATA: ld_lastid TYPE int4,
-          ls_cab    TYPE zjv_ovcab.
+          ls_cab    TYPE ZOVCAB_MV.
 
     " Container padrão de mensagens do SAP Gateway (OData)
     DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container(  ).
@@ -87,13 +89,13 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     ls_cab-criacao_usuario = sy-uname.
 
     " Preenche campos técnicos de criação com data, hora e usuário do servidor
-    SELECT SINGLE MAX( ordemid ) INTO ld_lastid FROM zjv_ovcab.
+    SELECT SINGLE MAX( ordemid ) INTO ld_lastid FROM ZOVCAB_MV.
 
     " Gera ordemid de forma ingênua pegando o MAX atual (RACE CONDITION!)
     ls_cab-ordemid = ld_lastid + 1.
 
     " Grava diretamente na tabela Z (sem lock/autorização/validação)
-    INSERT zjv_ovcab FROM ls_cab.
+    INSERT ZOVCAB_MV FROM ls_cab.
 
     " Se falhar, devolve erro de negócio no padrão Gateway
     IF sy-subrc <> 0.
@@ -147,10 +149,10 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     ENDIF.
 
     " Caso OrdemId tenha sido informado, exclui registros da tabela de itens pela chave OrdemId
-    DELETE FROM zjv_ovitem WHERE ordemid = ls_key_tab-value.
+    DELETE FROM ZOVITEM_MV WHERE ordemid = ls_key_tab-value.
 
     " Em seguida, exclui o registro do cabeçalho pela mesma chave OrdemId
-    DELETE FROM zjv_ovcab WHERE ordemid = ls_key_tab-value.
+    DELETE FROM ZOVCAB_MV WHERE ordemid = ls_key_tab-value.
     IF sy-subrc <> 0. " Se não conseguiu excluir no cabeçalho (nenhum registro encontrado ou erro)
 
       " Faz rollback de todas as alterações anteriores (desfaz a exclusão dos itens também)
@@ -178,9 +180,9 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   METHOD ovcabset_get_entity.
 
     " Declaração de variáveis locais
-    DATA: ld_ordemid TYPE zjv_ovcab-ordemid. " Guarda o ID da ordem informado na chave da requisição OData
+    DATA: ld_ordemid TYPE ZOVCAB_MV-ordemid. " Guarda o ID da ordem informado na chave da requisição OData
     DATA: ls_key_tab LIKE LINE OF it_key_tab. " Estrutura auxiliar para leitura da chave recebida
-    DATA: ls_cab     TYPE zjv_ovcab.          " Estrutura para receber os dados do cabeçalho da ordem (tabela Z)
+    DATA: ls_cab     TYPE ZOVCAB_MV.          " Estrutura para receber os dados do cabeçalho da ordem (tabela Z)
 
     " Objeto para manipulação de mensagens do Gateway (erros, avisos, etc.)
     DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container( ).
@@ -207,7 +209,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     " === Passo 2: Buscar dados no banco ===
     SELECT SINGLE *                       " Lê apenas um registro
       INTO ls_cab
-      FROM zjv_ovcab                      " Tabela customizada de cabeçalho da ordem
+      FROM ZOVCAB_MV                      " Tabela customizada de cabeçalho da ordem
      WHERE ordemid = ld_ordemid.          " Filtra pelo ID recebido
 
     " === Passo 3: Preencher entidade de retorno ===
@@ -244,8 +246,8 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   METHOD ovcabset_get_entityset.
 
     " Tabelas e estruturas de trabalho
-    DATA: lt_cab TYPE TABLE OF zjv_ovcab.     "buffer para linhas lidas do cabeçalho (tabela Z)
-    DATA: ls_cab TYPE zjv_ovcab.              "work area para percorrer lt_cab
+    DATA: lt_cab TYPE TABLE OF ZOVCAB_MV.     "buffer para linhas lidas do cabeçalho (tabela Z)
+    DATA: ls_cab TYPE ZOVCAB_MV.              "work area para percorrer lt_cab
     DATA: ls_entityset LIKE LINE OF et_entityset. "linha do EntitySet OData de resposta
 
     " Suporte à ordenação dinâmica (ORDER BY)
@@ -280,7 +282,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     " - ordenação dinâmica (ld_orderby)
     " - paginação (TOP/SKIP) de acordo com is_paging
     SELECT *
-      FROM zjv_ovcab
+      FROM ZOVCAB_MV
       WHERE (iv_filter_string)     "filtro dinâmico pré-montado
       ORDER BY (ld_orderby)        "ordenar pelos campos/direções solicitados
       INTO TABLE @lt_cab
@@ -357,7 +359,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     er_entity-totalordem = er_entity-totalitens + er_entity-totalfrete.
 
     " Atualiza a Z-table com os novos valores (filtro pela chave ORDMEID)
-    UPDATE zjv_ovcab
+    UPDATE ZOVCAB_MV
        SET clienteid  = er_entity-clienteid
            totalitens = er_entity-totalitens
            totalfrete = er_entity-totalfrete
@@ -380,7 +382,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   method OVITEMSET_CREATE_ENTITY.
 
     " Declara uma estrutura local correspondente à tabela Z de itens
-    DATA: ls_item    TYPE zjv_ovitem.
+    DATA: ls_item    TYPE ZOVITEM_MV.
 
     " Recupera o container de mensagens do Gateway (usado para devolver erros ao consumidor OData)
     DATA(lo_msg) = me->/iwbep/if_mgw_conv_srv_runtime~get_message_container(  ).
@@ -395,7 +397,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     IF er_entity-itemid = 0.
 
       " Busca o maior itemid já existente para a mesma ordemid
-      SELECT SINGLE MAX( itemid ) INTO er_entity-itemid FROM zjv_ovitem WHERE ordemid = er_entity-ordemid.
+      SELECT SINGLE MAX( itemid ) INTO er_entity-itemid FROM ZOVITEM_MV WHERE ordemid = er_entity-ordemid.
 
       " Incrementa em +1 para gerar o próximo item
       er_entity-itemid = er_entity-itemid + 1.
@@ -403,7 +405,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     ENDIF.
 
     " Insere diretamente o registro na tabela Z
-    INSERT zjv_ovitem FROM ls_item.
+    INSERT ZOVITEM_MV FROM ls_item.
 
     " Caso ocorra erro no INSERT, registra mensagem de erro no container e dispara exceção de negócio OData
     IF sy-subrc <> 0.
@@ -423,8 +425,8 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
 
   METHOD ovitemset_delete_entity.
 
-    " Declara uma estrutura do tipo da tabela de itens (zjv_ovitem)
-    DATA: ls_item    TYPE zjv_ovitem.
+    " Declara uma estrutura do tipo da tabela de itens (ZOVITEM_MV)
+    DATA: ls_item    TYPE ZOVITEM_MV.
 
     " Declara uma estrutura para receber uma linha da tabela de chaves
     DATA: ls_key_tab LIKE LINE OF it_key_tab.
@@ -439,9 +441,9 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     " Busca o parâmetro 'ItemId' da tabela it_key_tab e grava em ls_item-itemid
     ls_item-itemid  = it_key_tab[ name = 'ItemId' ]-value.
 
-    " Realiza a exclusão direta no banco da tabela Z (zjv_ovitem)
+    " Realiza a exclusão direta no banco da tabela Z (ZOVITEM_MV)
     " Apenas remove o registro cujo OrdemId e ItemId coincidam
-    DELETE FROM zjv_ovitem
+    DELETE FROM ZOVITEM_MV
      WHERE ordemid = ls_item-ordemid
        AND itemid  = ls_item-itemid.
 
@@ -467,7 +469,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
 
     " Declaração de variáveis auxiliares
     DATA: ls_key_tab LIKE LINE OF it_key_tab. " Usada para ler parâmetros de chave da requisição
-    DATA: ls_item    TYPE zjv_ovitem.         " Estrutura para armazenar dados do item
+    DATA: ls_item    TYPE ZOVITEM_MV.         " Estrutura para armazenar dados do item
     DATA: ld_error   TYPE flag.               " Flag de controle para marcar se houve erro de entrada
 
     " Contêiner de mensagens do Gateway (erros/avisos/infos)
@@ -509,7 +511,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     " === Passo 4: Buscar registro no banco ===
     SELECT SINGLE *                         " Busca registro único
       INTO ls_item
-      FROM zjv_ovitem                       " Tabela Z customizada de itens
+      FROM ZOVITEM_MV                       " Tabela Z customizada de itens
      WHERE ordemid = ls_item-ordemid
        AND itemid  = ls_item-itemid.
 
@@ -557,11 +559,11 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
       APPEND ls_ordemid_range TO lt_ordemid_range.
     ENDIF.
 
-    " Lê itens da ZJV_OVITEM filtrando pelo range (WHERE ordemid IN lt_ordemid_range)
+    " Lê itens da ZOVITEM_MV filtrando pelo range (WHERE ordemid IN lt_ordemid_range)
     " e preenche o entityset mapeando campos homônimos
     SELECT *
       INTO CORRESPONDING FIELDS OF TABLE et_entityset
-      FROM zjv_ovitem
+      FROM ZOVITEM_MV
       WHERE ordemid IN lt_ordemid_range.
 
   ENDMETHOD.
@@ -586,7 +588,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     er_entity-precotot = er_entity-quantidade * er_entity-precouni.
 
     " Atualiza a Z-table do item pela chave (ordemid+itemid)
-    UPDATE zjv_ovitem
+    UPDATE ZOVITEM_MV
        SET material   = er_entity-material
            descricao  = er_entity-descricao
            quantidade = er_entity-quantidade
@@ -613,13 +615,13 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
   METHOD /iwbep/if_mgw_appl_srv_runtime~create_deep_entity.
 
     " Estruturas do deep entity (cabeçalho + itens) conforme o MPC gerado
-    DATA : ls_deep_entity  TYPE zcl_zjv_ov_mpc_ext=>ty_ordem_item.
-    DATA : ls_deep_item    TYPE zcl_zjv_ov_mpc_ext=>ts_ovitem.
+    DATA : ls_deep_entity  TYPE zcl_zmv_ov_mpc_ext=>ty_ordem_item.
+    DATA : ls_deep_item    TYPE zcl_zmv_ov_mpc_ext=>ts_ovitem.
 
     " Estruturas/tabelas físicas (Z*) que serão persistidas
-    DATA : ls_cab          TYPE zjv_ovcab.
-    DATA : lt_item         TYPE STANDARD TABLE OF zjv_ovitem.
-    DATA : ls_item         TYPE zjv_ovitem.
+    DATA : ls_cab          TYPE ZOVCAB_MV.
+    DATA : lt_item         TYPE STANDARD TABLE OF ZOVITEM_MV.
+    DATA : ls_item         TYPE ZOVITEM_MV.
     DATA : ld_updkz        TYPE char1. " I = insert / U = update
 
     " Container de mensagens do Gateway para retorno de erros de negócio
@@ -643,7 +645,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
       ls_cab-criacao_usuario = sy-uname.
 
       " Geração de chave por MAX+1 (ATENÇÃO: suscetível a condição de corrida)
-      SELECT SINGLE MAX( ordemid ) INTO ls_cab-ordemid FROM zjv_ovcab.
+      SELECT SINGLE MAX( ordemid ) INTO ls_cab-ordemid FROM ZOVCAB_MV.
       ls_cab-ordemid = ls_cab-ordemid + 1.
 
     ELSE.
@@ -653,7 +655,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
       " Busca do cabeçalho existente para atualização
       SELECT SINGLE *
         INTO ls_cab
-        FROM zjv_ovcab
+        FROM ZOVCAB_MV
        WHERE ordemid = ls_deep_entity-ordemid.
 
       " Atualiza campos editáveis do cabeçalho com valores do deep entity
@@ -675,7 +677,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     IF ld_updkz = 'I'.
 
       " INSERT do cabeçalho
-      INSERT zjv_ovcab FROM ls_cab.
+      INSERT ZOVCAB_MV FROM ls_cab.
 
       IF sy-subrc <> 0.
         ROLLBACK WORK. " Reverte qualquer alteração anterior da LUW
@@ -693,7 +695,7 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     ELSE.
 
       " UPDATE/UPSERT do cabeçalho (MODIFY em tabela DB atualiza se existe/senão insere)
-      MODIFY zjv_ovcab FROM ls_cab.
+      MODIFY ZOVCAB_MV FROM ls_cab.
 
       IF sy-subrc <> 0.
         ROLLBACK WORK.
@@ -711,12 +713,12 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
     ENDIF.
 
     " Estratégia de itens: remove todos os itens do pedido e insere a nova lista
-    DELETE FROM zjv_ovitem WHERE ordemid = ls_cab-ordemid.
+    DELETE FROM ZOVITEM_MV WHERE ordemid = ls_cab-ordemid.
 
     IF lines( lt_item ) > 0.
 
       " INSERT em massa dos itens montados
-      INSERT zjv_ovitem FROM TABLE lt_item.
+      INSERT ZOVITEM_MV FROM TABLE lt_item.
 
       IF sy-subrc <> 0.
         ROLLBACK WORK.
@@ -756,6 +758,53 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
         is_data = ls_deep_entity
       CHANGING
         cr_data = er_deep_entity.
+
+  ENDMETHOD.
+
+
+  METHOD /iwbep/if_mgw_appl_srv_runtime~execute_action.
+
+      " Declaração de variáveis locais
+      DATA: ld_ordemid  TYPE ZOVCAB_MV-ordemid,                       " Identificador da ordem (chave primária da tabela ZOVCAB_MV)
+            ld_status   TYPE ZOVCAB_MV-status,                        " Novo status a ser gravado
+            lt_bapiret2 TYPE TABLE OF zcl_zmv_ov_mpc_ext=>ts_mensagem,  " Tabela de mensagens de retorno (sucesso/erro)
+            ls_bapiret2 TYPE zcl_zmv_ov_mpc_ext=>ts_mensagem.           " Estrutura individual de mensagem
+
+      " Verifica se a ação recebida corresponde à atualização de status
+      IF iv_action_name = 'ZFI_ATUALIZA_STATUS'.
+
+        " Recupera parâmetros de entrada da chamada OData
+        ld_ordemid = it_parameter[ name = 'ID_ORDEMID' ]-value.   " Id da ordem a ser atualizada
+        ld_status  = it_parameter[ name = 'ID_STATUS' ]-value.    " Novo status
+
+        " Atualiza diretamente a tabela Z (cuidado: operação direta em DB sem BAPI/commit controlado)
+        UPDATE ZOVCAB_MV
+          SET status = ld_status
+          WHERE ordemid = ld_ordemid.
+
+        " Trata retorno do UPDATE
+        IF sy-subrc = 0.
+          " Atualização bem-sucedida
+          CLEAR ls_bapiret2.
+          ls_bapiret2-type      = 'S'.                  " Mensagem de sucesso
+          ls_bapiret2-message  = 'Status atualizado'.
+          APPEND ls_bapiret2 TO lt_bapiret2.
+        ELSE.
+          " Falha na atualização (nenhum registro encontrado ou erro DB)
+          CLEAR ls_bapiret2.
+          ls_bapiret2-type      = 'E'.                  " Mensagem de erro
+          ls_bapiret2-message  = 'Erro ao atualizar status'.
+          APPEND ls_bapiret2 TO lt_bapiret2.
+        ENDIF.
+
+      ENDIF.
+
+      " Retorna a tabela de mensagens ao consumidor do serviço OData
+      CALL METHOD me->copy_data_to_ref
+        EXPORTING
+          is_data = lt_bapiret2
+        CHANGING
+          cr_data = er_data.
 
   ENDMETHOD.
 ENDCLASS.
