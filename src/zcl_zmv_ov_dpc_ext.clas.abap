@@ -767,8 +767,8 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
       " Declaração de variáveis locais
       DATA: ld_ordemid  TYPE ZOVCAB_MV-ordemid,                       " Identificador da ordem (chave primária da tabela ZOVCAB_MV)
             ld_status   TYPE ZOVCAB_MV-status,                        " Novo status a ser gravado
-            lt_bapiret2 TYPE TABLE OF zcl_zmv_ov_mpc_ext=>ts_mensagem,  " Tabela de mensagens de retorno (sucesso/erro)
-            ls_bapiret2 TYPE zcl_zmv_ov_mpc_ext=>ts_mensagem.           " Estrutura individual de mensagem
+            lt_bapiret2 TYPE TABLE OF zcl_zmv_ov_mpc_ext=>Mensagem2,  " Tabela de mensagens de retorno (sucesso/erro)
+            ls_bapiret2 TYPE zcl_zmv_ov_mpc_ext=>Mensagem2.           " Estrutura individual de mensagem
 
       " Verifica se a ação recebida corresponde à atualização de status
       IF iv_action_name = 'ZFI_ATUALIZA_STATUS'.
@@ -786,14 +786,14 @@ CLASS ZCL_ZMV_OV_DPC_EXT IMPLEMENTATION.
         IF sy-subrc = 0.
           " Atualização bem-sucedida
           CLEAR ls_bapiret2.
-          ls_bapiret2-type      = 'S'.                  " Mensagem de sucesso
-          ls_bapiret2-message  = 'Status atualizado'.
+          ls_bapiret2-tipo      = 'S'.                  " Mensagem de sucesso
+          ls_bapiret2-mensagem  = 'Status atualizado'.
           APPEND ls_bapiret2 TO lt_bapiret2.
         ELSE.
           " Falha na atualização (nenhum registro encontrado ou erro DB)
           CLEAR ls_bapiret2.
-          ls_bapiret2-type      = 'E'.                  " Mensagem de erro
-          ls_bapiret2-message  = 'Erro ao atualizar status'.
+          ls_bapiret2-tipo      = 'E'.                  " Mensagem de erro
+          ls_bapiret2-mensagem  = 'Erro ao atualizar status'.
           APPEND ls_bapiret2 TO lt_bapiret2.
         ENDIF.
 
